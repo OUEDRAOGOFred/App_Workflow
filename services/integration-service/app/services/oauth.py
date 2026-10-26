@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from google_auth_oauthlib.flow import Flow
+from oauthlib.oauth2 import InvalidClientError
 from sqlalchemy import select
 
 from app.core.config import get_settings
@@ -217,6 +218,18 @@ def callback(
                 ),
             }
         )
+    except InvalidClientError:
+        raise HTTPException(
+            400,
+            {
+                "detail": (
+                    "Google refuse les identifiants OAuth ; vérifier l’ID client "
+                    "et le secret du même client Web dans la configuration locale"
+                ),
+                "code": "oauth_invalid_client",
+                "help_url": CHECKLIST,
+            },
+        ) from None
     except Exception:
         raise HTTPException(
             400,

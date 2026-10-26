@@ -9,8 +9,9 @@ import {
   type Node,
   type NodeProps,
 } from '@xyflow/react';
-import type { Graph, NodeData } from '../api/types';
+import type { ArchivedGraph, NodeData } from '../api/types';
 import { Badge, TypeIcon } from './ui';
+import { historyNodes } from './graph';
 export type FlowNode = Node<
   NodeData & { type_key?: string; status?: string },
   'agent'
@@ -57,17 +58,14 @@ export function HistoryCanvas({
   graph,
   statuses,
 }: {
-  graph: Graph;
+  graph: ArchivedGraph;
   statuses: Record<string, string>;
 }) {
   return (
     <div className="history-canvas">
       <ReactFlowProvider>
         <ReactFlow<FlowNode>
-          nodes={graph.nodes.map((n) => ({
-            ...n,
-            data: { ...n.data, status: statuses[n.id] },
-          }))}
+          nodes={historyNodes(graph, statuses)}
           edges={graph.edges.map((e) => ({
             ...e,
             sourceHandle: e.sourceHandle || undefined,

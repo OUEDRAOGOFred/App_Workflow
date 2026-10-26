@@ -135,7 +135,10 @@ class Services:
                 "nodes": [
                     {
                         "id": "test",
+                        "type": "agent",
+                        "position": {"x": 0, "y": 0},
                         "data": {
+                            "label": agent.get("name") or kind["label"],
                             "agent_id": "test",
                             "input": {},
                             "timeout_seconds": 60,

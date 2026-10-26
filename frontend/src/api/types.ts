@@ -124,9 +124,18 @@ export type Step = {
   started_at: string | null;
   finished_at: string | null;
 };
+// Older agent-test snapshots omit canvas metadata. Workflow graphs remain strict.
+export type ArchivedGraph = {
+  nodes: (Omit<GraphNode, 'position' | 'type' | 'data'> & {
+    position?: GraphNode['position'];
+    type?: 'agent';
+    data: Partial<NodeData>;
+  })[];
+  edges: GraphEdge[];
+};
 export type ExecutionDetail = Execution & {
   workflow_name: string;
-  graph: Graph;
+  graph: ArchivedGraph;
   steps: Step[];
 };
 export type Validation = {

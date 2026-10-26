@@ -34,6 +34,7 @@ from app.main import app
 from app.models.entities import Artifact, Connection, PollCursor
 from app.services.google_auth import SCOPES
 from google.auth.exceptions import RefreshError
+from oauthlib.oauth2 import InvalidClientError
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
@@ -974,3 +975,34 @@ def test_stateless_http_request_needs_auth_and_respects_network_policy(
         ).status_code
         == 401
     )
+
+
+def test_oauth_invalid_client_is_actionable_without_exposing_provider_secrets(
+    client, monkeypatch
+):
+    http, engine = client
+    real_settings(monkeypatch)
+    start = http.get("/integrations/google/oauth/start").json()
+    state = parse_qs(urlsplit(start["authorization_url"]).query)["state"][0]
+    oauth = MagicMock()
+    oauth.fetch_token.side_effect = InvalidClientError(
+        description="Rejected credential: private-provider-secret"
+    )
+    with patch("app.services.oauth.flow", return_value=oauth):
+        response = http.get(
+            "/integrations/google/oauth/callback",
+            params={"state": state, "code": "one-use-authorization-code"},
+        )
+    assert response.status_code == 400
+    assert response.json()["code"] == "oauth_invalid_client"
+    assert "même client Web" in response.json()["detail"]
+    assert response.json()["help_url"].endswith("/checklist")
+    assert "private-provider-secret" not in response.text
+    assert "one-use-authorization-code" not in response.text
+    with Session(engine) as db:
+        assert db.scalar(select(Connection)) is None
+    replay = http.get(
+        "/integrations/google/oauth/callback",
+        params={"state": state, "code": "one-use-authorization-code"},
+    )
+    assert replay.json()["code"] == "invalid_oauth_state"

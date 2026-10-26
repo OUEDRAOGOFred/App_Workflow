@@ -1,0 +1,12 @@
+FACTURE No ATELIER-20261026
+Date : 26 octobre 2026
+
+Fournisseur : Atelier Exemple
+Client : Démonstration Workflow
+
+Prestation de service : 100,00 EUR HT
+TVA à 20 % : 20,00 EUR
+TOTAL TTC À PAYER : 120,00 EUR
+
+Paiement à réception.
+Document fictif pour le test de classification et d'automatisation Atelier.

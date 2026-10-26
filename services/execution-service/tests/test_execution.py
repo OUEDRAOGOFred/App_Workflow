@@ -717,3 +717,17 @@ def test_history_keeps_archived_graph_after_workflow_changes(fixture):
     backend.snapshot["graph"]["nodes"].clear()
     result = client.get(f"/executions/{identifier}").json()
     assert result["graph"] == original and result["workflow_name"] == "Test"
+
+
+@pytest.mark.parametrize("draft", [False, True])
+def test_agent_test_history_includes_canvas_metadata(fixture, draft):
+    client, backend, _ = fixture
+    agent = next(iter(backend.snapshot["agents"].values()))
+    resource = "agent-drafts" if draft else "agents"
+    response = client.post(f"/{resource}/{agent['id']}/test", json={"input": {}})
+    assert response.status_code == 202
+    result = client.get(f"/executions/{response.json()['id']}").json()
+    node = result["graph"]["nodes"][0]
+    assert node["type"] == "agent"
+    assert node["position"] == {"x": 0, "y": 0}
+    assert node["data"]["label"] == ("Brouillon" if draft else agent["name"])

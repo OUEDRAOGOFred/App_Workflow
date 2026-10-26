@@ -1,4 +1,4 @@
-import type { Graph } from '../api/types';
+import type { ArchivedGraph, Graph } from '../api/types';
 export function validateGraph(graph: Graph): string[] {
   const errors: string[] = [];
   if (!graph.nodes.length) return ['Ajoutez au moins un agent au canevas.'];
@@ -33,4 +33,25 @@ export function validateGraph(graph: Graph): string[] {
   }
   if (visited < graph.nodes.length) errors.push('Le graphe contient un cycle.');
   return errors;
+}
+
+// Supply display metadata for legacy snapshots without changing stored history.
+export function historyNodes(
+  graph: ArchivedGraph,
+  statuses: Record<string, string>,
+) {
+  return graph.nodes.map((node, index) => ({
+    ...node,
+    type: 'agent' as const,
+    position: node.position ?? { x: index * 280, y: 0 },
+    data: {
+      ...node.data,
+      agent_id: node.data.agent_id || node.id,
+      label: node.data.label || node.id,
+      input: node.data.input || {},
+      timeout_seconds: node.data.timeout_seconds ?? 60,
+      retries: node.data.retries ?? 0,
+      status: statuses[node.id],
+    },
+  }));
 }

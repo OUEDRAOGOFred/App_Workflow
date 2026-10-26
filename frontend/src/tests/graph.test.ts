@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateGraph } from '../components/graph';
+import { historyNodes, validateGraph } from '../components/graph';
 import { decodeEvents } from '../api/stream';
 import type { Graph, GraphNode } from '../api/types';
 const node = (id: string): GraphNode => ({
@@ -66,6 +66,47 @@ describe('SSE fragmenté', () => {
   it('ignore un événement malformé sans perdre le suivant', () => {
     expect(decodeEvents('data: nope\n\nid: 2\ndata: {}\n\n').events).toEqual([
       { id: 2, event: 'message', data: {} },
+    ]);
+  });
+});
+
+describe('graphes historiques des tests d’agent', () => {
+  it('rend un ancien nœud sans position, type ou libellé sans modifier l’archive', () => {
+    const graph = {
+      nodes: [
+        {
+          id: 'test',
+          data: {
+            agent_id: 'test',
+            input: {},
+            timeout_seconds: 60,
+            retries: 0,
+          },
+        },
+      ],
+      edges: [],
+    };
+    const archived = JSON.stringify(graph);
+    const nodes = historyNodes(graph, { test: 'failed' });
+    expect(nodes[0]).toMatchObject({
+      id: 'test',
+      type: 'agent',
+      position: { x: 0, y: 0 },
+      data: { label: 'test', status: 'failed' },
+    });
+    expect(JSON.stringify(graph)).toBe(archived);
+  });
+  it('conserve la position et le libellé des workflows et place les anciens nœuds séparément', () => {
+    const first = node('a');
+    first.position = { x: 180, y: 70 };
+    const graph = { nodes: [first, { id: 'b', data: {} }], edges: [] };
+    expect(
+      historyNodes(graph, { a: 'success', b: 'running' }).map(
+        (n) => n.position,
+      ),
+    ).toEqual([
+      { x: 180, y: 70 },
+      { x: 280, y: 0 },
     ]);
   });
 });
