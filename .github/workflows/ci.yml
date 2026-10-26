@@ -1,4 +1,4 @@
-name: Workflow backend
+name: Workflow application
 on: [push, pull_request]
 jobs:
   test:
@@ -11,11 +11,25 @@ jobs:
           cache: pip
       - run: python -m venv .venv
       - run: .venv/bin/pip install -r requirements-dev.txt
-      - run: make lint test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm --prefix frontend ci
+      - run: make lint test frontend-build
       - run: cp .env.example .env
       - run: docker compose -f docker-compose.yml -f docker-compose.test.yml config --quiet
       - run: docker compose -f docker-compose.yml -f docker-compose.test.yml up --build -d --wait --wait-timeout 240
       - run: make smoke
+      - run: cd frontend && npx playwright install --with-deps chromium
+      - run: make frontend-e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-browser-results
+          path: frontend/test-results/
+          retention-days: 3
       - if: always()
         run: docker compose logs --no-color
       - if: always()

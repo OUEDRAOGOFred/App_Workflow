@@ -2,7 +2,7 @@ PYTHON ?= .venv/bin/python
 PYTHON_BIN = $(abspath $(PYTHON))
 COMPOSE ?= docker compose
 
-.PHONY: up down test lint format smoke
+.PHONY: up down test lint format smoke frontend-test frontend-build frontend-lint frontend-e2e
 up:
 	$(COMPOSE) up --build -d --wait
 down:
@@ -16,10 +16,12 @@ test:
 	cd services/ml-classifier-service && $(PYTHON_BIN) -m pytest -q
 	cd services/execution-service && $(PYTHON_BIN) -m pytest -q
 	$(PYTHON) scripts/check_secrets.py
+	npm --prefix frontend test
 lint:
 	$(PYTHON) -m ruff check services scripts
 	$(PYTHON) -m black --workers 1 --check services scripts
 	$(PYTHON) scripts/check_secrets.py
+	npm --prefix frontend run lint
 format:
 	$(PYTHON) -m black --workers 1 services scripts
 	$(PYTHON) -m ruff check --fix services scripts
@@ -29,3 +31,12 @@ smoke:
 	$(PYTHON) scripts/smoke_integrations.py
 	$(PYTHON) scripts/smoke_execution.py
 
+
+frontend-test:
+	npm --prefix frontend test
+frontend-build:
+	npm --prefix frontend run build
+frontend-lint:
+	npm --prefix frontend run lint
+frontend-e2e:
+	npm --prefix frontend run e2e

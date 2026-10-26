@@ -16,3 +16,7 @@ credentials*.json
 client_secret*.json
 token.json
 
+
+*.tsbuildinfo
+playwright-report/
+test-results/

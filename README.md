@@ -2,15 +2,16 @@
 
 Application de classe inspirée de n8n : création d’agents, assemblage visuel de workflows et exécutions traçables. Le développement suit les six phases du cahier des charges.
 
-**Livré actuellement : phases 1 à 4.** Authentification, agents, workflows versionnés, connexions chiffrées, connecteurs et classification sont complétés par un moteur Celery, des déclencheurs automatiques, un historique détaillé et un flux SSE. L’interface React reste en phase 5.
+**Livré actuellement : phases 1 à 5.** Le backend dispose maintenant d’une interface React/TypeScript : dashboard, liste des agents, assistant en cinq étapes avec brouillons, éditeur React Flow, historique et logs SSE, connexions Google/Telegram et thème clair/sombre.
 
-Démonstration actuelle : Swagger et `make smoke` permettent de recevoir un document Telegram simulé, le classifier, enregistrer une ligne Sheets, préparer un email et une réponse Telegram simulés. Ce parcours s’exécute désormais dans le worker Celery, manuellement puis automatiquement après réception Telegram simulée. La capture/GIF finale montrera le wizard, le canevas puis les cinq étapes Telegram → Classification → Sheets → Gmail → Telegram ; elle sera ajoutée après la phase frontend.
+Démonstration actuelle : Swagger et `make smoke` permettent de recevoir un document Telegram simulé, le classifier, enregistrer une ligne Sheets, préparer un email et une réponse Telegram simulés. Ce parcours s’exécute désormais dans le worker Celery, manuellement puis automatiquement après réception Telegram simulée. L’interface « Atelier » permet de créer ces cinq agents et de les relier sur le canevas. Les captures de validation sont présentées dans la section Interface.
 
 ## 1. Architecture et services
 
 ```mermaid
 flowchart TD
-    browser[Swagger actuel / React en phase 5] --> gateway[API Gateway :8000]
+    browser[Navigateur] --> frontend[React / Nginx :8080]
+    frontend -->|API et SSE| gateway[API Gateway :8000]
     gateway --> auth[auth-service]
     auth --> db[(PostgreSQL : workflow_auth)]
     auth --> redis[(Redis)]
@@ -53,19 +54,19 @@ flowchart TD
 | execution-service | Soumission, historique, annulation et SSE | Livré |
 | execution-worker | Moteur Celery, deux tâches concurrentes | Livré |
 | execution-scheduler | Consommation Redis, cron, reprise des soumissions | Livré |
-| frontend | React, wizard, React Flow, historique | Phase 5 |
+| frontend | React 19, TypeScript, Vite, Tailwind, React Flow, TanStack Query, Zustand ; Nginx non root | Livré |
 
-Seule la gateway est publiée, sur l’interface locale `127.0.0.1`. Les services ne partagent pas leurs tables. Chaque futur service persistant recevra une base et un rôle propres. Les échanges interservices se feront par HTTP ou Redis.
+La gateway (8000) et le frontend (8080) sont publiés sur l’interface locale `127.0.0.1`. Le frontend relaie ses requêtes `/api/v1` et les flux SSE vers la gateway. Les services ne partagent pas leurs tables. Chaque futur service persistant recevra une base et un rôle propres. Les échanges interservices se feront par HTTP ou Redis.
 
 ## 2. Installation en trois commandes
 
-Prérequis : Docker Engine et Docker Compose avec prise en charge de `--wait`, ports locaux disponibles, accès Internet au premier build. Python 3.11+ et Make sont nécessaires uniquement pour développer et tester hors Docker.
+Prérequis : Docker Engine et Docker Compose avec prise en charge de `--wait`, ports locaux disponibles, accès Internet au premier build. Python 3.11+, Node.js 24 et Make sont nécessaires pour développer et tester hors Docker ; ils ne sont pas nécessaires au simple démarrage Compose.
 
 ```bash
 [ -f .env ] || cp .env.example .env
 docker compose up --build
 # Dans un autre terminal :
-xdg-open http://localhost:8000/docs
+xdg-open http://localhost:8080
 ```
 
 Sur macOS/Windows, ouvrir cette URL dans le navigateur. La clé JWT est générée automatiquement au premier lancement et conservée dans le volume `service-secrets`. Aucun identifiant Google ni Telegram n’est nécessaire en mode démonstration. Les clés JWT et Fernet sont conservées dans le même volume privé.
@@ -78,17 +79,17 @@ docker compose ps -a
 curl --fail http://localhost:8000/health
 ```
 
-Les onze services persistants doivent être `healthy`. `secrets-init` et `databases-init` doivent être `Exited (0)` : ce sont des tâches d’initialisation. Les migrations Alembic s’appliquent avant le démarrage de chaque service possédant une base. Le démarrage échoue si elles échouent.
+Les douze services persistants doivent être `healthy`. `secrets-init` et `databases-init` doivent être `Exited (0)` : ce sont des tâches d’initialisation. Les migrations Alembic s’appliquent avant le démarrage de chaque service possédant une base. Le démarrage échoue si elles échouent.
 
 Le provisionnement crée les rôles `workflow_agents`, `workflow_workflows`, `workflow_integrations`, `workflow_executions` et leurs bases respectives. Les mots de passe locaux sont `AGENT_DB_PASSWORD`, `WORKFLOW_DB_PASSWORD`, `INTEGRATION_DB_PASSWORD`, `EXECUTION_DB_PASSWORD`. Les connexions aux bases métier sont refusées aux autres rôles non administrateurs. Le rôle PostgreSQL de la phase 1 reste administrateur local ; les nouveaux services utilisent leurs rôles limités. Le provisionnement est idempotent et fonctionne aussi sur le volume de la phase 1. Il ne change pas le mot de passe d’un rôle déjà créé : une rotation doit modifier le rôle PostgreSQL et `.env` ensemble.
 
 `docker compose down` arrête l’application en conservant comptes et clé. `docker compose down -v` **efface les données et la clé**, et invalide les sessions : réserver cette commande à une réinitialisation volontaire. Le mot de passe PostgreSQL fourni est une valeur de développement pour une base sans port publié ; le remplacer avant tout déploiement. Changer `.env` ne modifie pas le mot de passe d’une base déjà initialisée.
 
-Pour choisir un autre port : définir `GATEWAY_PORT` dans `.env`. Adapter `API_URL` pour le smoke test. `.env` n’est jamais versionné.
+Pour choisir d’autres ports : définir `GATEWAY_PORT` et `FRONTEND_PORT` dans `.env`. Sur cette machine, 8000 et 8080 sont utilisés par un autre projet ; les essais utilisent 18000 et 18080 sans toucher à ce projet. Adapter `API_URL` pour le smoke test. Si le port de la gateway change en mode réel, adapter aussi `GOOGLE_REDIRECT_URI` et l’URI autorisée dans Google Cloud. `.env` n’est jamais versionné.
 
 ## 3. Configuration des intégrations
 
-Les connecteurs sont implémentés. Le mode effectif est démonstration si `MOCK_INTEGRATIONS=true` **ou** si un identifiant OAuth Google est absent. L’avertissement est visible dans les logs et via `GET /integrations/status` ; il sera affiché par la page Connexions en phase 5. Aucune connexion réelle existante ne peut être utilisée tant que le mode démonstration est actif. Ne recopiez pas de secret dans un fichier versionné, un exemple HTTP ou ce README.
+Les connecteurs sont implémentés. Le mode effectif est démonstration si `MOCK_INTEGRATIONS=true` **ou** si un identifiant OAuth Google est absent. L’avertissement est visible dans les logs et via `GET /integrations/status` ; il est affiché dans la page Connexions et dans une bannière générale. Aucune connexion réelle existante ne peut être utilisée tant que le mode démonstration est actif. Ne recopiez pas de secret dans un fichier versionné, un exemple HTTP ou ce README.
 
 ### Google OAuth et Checklist Google
 
@@ -107,7 +108,7 @@ Le projet `gmail-agent`, les API Gmail et Sheets et un client OAuth sont déclar
 7. Désactiver `MOCK_INTEGRATIONS` une fois les variables réelles remplies, redémarrer integration-service et appeler `/integrations/google/oauth/start` avec un access token applicatif. Ouvrir `authorization_url` dans le navigateur. Le flux utilise `access_type=offline`, `prompt=consent`, PKCE et un état chiffré à usage unique valable dix minutes, lié au navigateur par un cookie HttpOnly SameSite=Lax. Utiliser le même navigateur et le même hôte pour démarrer et terminer OAuth. Un frontend séparé devra inclure les cookies (`credentials: "include"`) lors du démarrage OAuth. Le callback retourne uniquement les métadonnées de la connexion. [Flux Google officiel](https://developers.google.com/identity/protocols/oauth2/web-server)
 8. Les access/refresh tokens sont chiffrés avec Fernet. Un renouvellement est tenté avant expiration et persisté chiffré ; un échec marque la connexion `expired` et renvoie `connection_expired` (« Connexion expirée, reconnecter »). Pour reconnecter, appeler OAuth start avec `?connection_id=<UUID>` ; la connexion doit appartenir au compte et être réelle.
 
-Checklist à terminer : Drive API activée, URI exacte, quatre scopes ajoutés, adresse ajoutée aux utilisateurs de test. `redirect_uri_mismatch` indique une URI différente ; `access_denied` peut venir d’un refus du consentement ou de l’absence dans l’audience de test. L’API renvoie un `help_url` vers `/api/v1/integrations/google/checklist`, accessible sans session. La future interface affichera ce lien. Une erreur bloquée directement par l’écran Google, avant redirection, se corrige dans Google Cloud à l’aide de cette même checklist. Les refresh tokens Google en mode test peuvent expirer après sept jours.
+Checklist à terminer : Drive API activée, URI exacte, quatre scopes ajoutés, adresse ajoutée aux utilisateurs de test. `redirect_uri_mismatch` indique une URI différente ; `access_denied` peut venir d’un refus du consentement ou de l’absence dans l’audience de test. L’API renvoie un `help_url` vers `/api/v1/integrations/google/checklist`, accessible sans session. La page Connexions affiche ce lien. Une erreur bloquée directement par l’écran Google, avant redirection, se corrige dans Google Cloud à l’aide de cette même checklist. Les refresh tokens Google en mode test peuvent expirer après sept jours.
 
 En démonstration, OAuth start retourne une connexion Google locale partagée par Gmail et Sheets, avec un classeur `demo-sheet`, une feuille `Documents` et un message de test. Les lignes ajoutées/modifiées sont persistées ; les envois restent dans `/connections/{id}/outbox`. Les exemples de données sont clairement marqués `mock`.
 
@@ -318,7 +319,7 @@ Collection exécutable : [docs/api.http](docs/api.http), compatible avec REST Cl
 
 ## 5. Créer un agent
 
-Le wizard graphique à cinq étapes reste prévu en phase 5. Ses API sont disponibles dès maintenant :
+Dans **Agents → Créer un agent**, le wizard affiche cinq étapes numérotées. Les API correspondantes restent accessibles :
 
 1. **Type** : consulter `GET /agent-types` et son `config_schema`.
 2. **Connexion** : créer/tester une connexion, puis conserver son UUID `connection_id`. L’existence, l’appartenance et le type sont contrôlés par HTTP lors de la création/modification d’un agent ; l’activation exige un état `active`. Aucun token ne doit être stocké dans `config`. Le test de connexion reste une action explicite, distincte de la vérification des métadonnées.
@@ -326,7 +327,7 @@ Le wizard graphique à cinq étapes reste prévu en phase 5. Ses API sont dispon
 4. **Test** : `/agent-drafts/{id}/test` soumet une configuration complète au worker ; consulter ensuite son historique ou son flux SSE.
 5. **Résumé et activation** : `POST /agents`, puis `POST /agents/{id}/activate`. Le statut initial est `draft`. Une connexion est obligatoire pour les types Google/Telegram. Modifier un agent le remet en brouillon ; il faut le réactiver.
 
-Pour tester sans connexion externe, choisir `transform` avec `{"mapping":{"text":"Facture 42"}}`. `last_run_at` reste null tant que le moteur n’a pas exécuté l’agent. Les captures du wizard accompagneront le frontend.
+Pour tester sans connexion externe, choisir `transform` avec `{"mapping":{"text":"Facture 42"}}`. `last_run_at` reste null tant que le moteur n’a pas exécuté l’agent. Le brouillon est enregistré sur le serveur après une pause de saisie et lors d’un départ dans l’interface. Retrouvez-le dans le bandeau des brouillons de la page Agents. Un brouillon ne conserve que les valeurs JSON valides ; ses identifiants de connexion ne contiennent aucun secret.
 
 ## 6. Créer un workflow
 
@@ -351,7 +352,7 @@ Déclencheurs : `manual`, `webhook`, `cron` avec `schedule` à cinq champs, `tel
 
 `PUT /workflows/{id}` exige la version courante et crée une nouvelle version ; un conflit renvoie 409. Toute modification désactive le workflow. Une transition actif/inactif crée aussi une version ; répéter le même état ne la modifie pas. Les instantanés conservent nom, description, graphe, déclencheur et activation. Les références d’agents ne figent pas leur configuration : elles sont revérifiées à chaque validation et le sont à chaque exécution.
 
-Le scénario Telegram trigger → Classification → Sheets append → Gmail send → Telegram send est exécuté et vérifié avec le moteur. Le glisser-déposer React Flow reste en phase 5. Le mapping résout notamment `{{ nodes.<id>.output.<champ> }}`.
+Le scénario Telegram trigger → Classification → Sheets append → Gmail send → Telegram send est exécuté et vérifié avec le moteur. Le glisser-déposer React Flow est disponible dans l’interface. Le mapping résout notamment `{{ nodes.<id>.output.<champ> }}`.
 
 ## 7. Types d’agents et paramètres
 
@@ -371,7 +372,7 @@ Les 11 types sont stockés par migration dans `agent_types` et exposent un JSON 
 | `http_request` | Non | `url` obligatoire, `method` parmi GET/POST/PUT/DELETE, `body` JSON facultatif |
 | `transform` | Non | `mapping` objet obligatoire (100 propriétés max.) |
 
-Les valeurs par défaut des JSON Schemas sont des indications pour le futur formulaire ; la phase 2 n’injecte pas ces valeurs dans les configurations persistées. Le moteur applique les valeurs d’exécution par défaut. Un agent actif est configuré et activé, sans garantie actuelle de connectivité externe. Le type calculator dépendra de la présence du script existant.
+Le wizard initialise les valeurs par défaut déclarées dans le JSON Schema ; les API de création n’injectent pas les valeurs absentes dans les configurations persistées. Le moteur applique les valeurs d’exécution par défaut. Un agent actif est configuré et activé, sans garantie actuelle de connectivité externe. Le type calculator dépendra de la présence du script existant.
 
 ### Moteur, historique et déclencheurs (phase 4)
 
@@ -406,6 +407,59 @@ Cron utilise cinq champs, le fuseau `SCHEDULER_TIMEZONE` (`Africa/Ouagadougou` p
 
 Le flux SSE traverse la gateway sans mise en mémoire tampon. Utiliser `fetch` avec l’en-tête Authorization et reprendre avec `Last-Event-ID` ; aucun JWT dans l’URL. Le serveur clôt le flux après dix minutes, permettant une reconnexion. L’historique restitue le graphe archivé même si le workflow a ensuite changé. Les API internes de rapport d’agent et de liste des workflows actifs exigent un JWT de service signé avec portée appropriée ; elles ne sont pas exposées par la gateway.
 
+
+## Interface React — phase 5
+
+![Liste des cinq agents créés via le wizard](docs/screenshots/agents-desktop.png)
+
+![Canevas React Flow de la démonstration](docs/screenshots/workflow-desktop.png)
+
+![Exécution de cinq étapes avec logs et résultats](docs/screenshots/execution-desktop.png)
+
+Captures complémentaires : [dashboard](docs/screenshots/dashboard-desktop.png), [choix du type](docs/screenshots/wizard-types.png), [configuration Sheets](docs/screenshots/wizard-configuration.png), [dashboard mobile](docs/screenshots/dashboard-mobile.png). Elles proviennent de la pile QA avec des données simulées.
+
+Ouvrir **http://localhost:8080**, créer son compte puis se connecter. En mode démonstration, une bannière confirme que les actions externes sont simulées. L’interface ne préremplit aucun compte.
+
+| Page | Fonctions |
+|---|---|
+| Vue d’ensemble | Agents actifs, workflows, nombre d’exécutions, taux de réussite, activité sur sept jours et derniers lancements |
+| Agents | Tous les agents, filtres nom/type/statut, actualisation toutes les cinq secondes, test, modification, activation, désactivation et suppression |
+| Créer un agent | Type → connexion et test → formulaire JSON Schema → test asynchrone avec résultat → résumé et activation ; reprise des brouillons serveur |
+| Workflows | Liste, création, édition et suppression ; version courante et activation visibles |
+| Éditeur | Palette d’agents actifs, glisser-déposer ou ajout par clic, liens entre poignées, branches Oui/Non, panneau d’entrée JSON, délai et retries ; sauvegarde, validation et lancement |
+| Exécutions | Filtres workflow/statut, étapes avec entrées/sorties/erreurs, graphe historique coloré, journal SSE avec reprise et annulation |
+| Connexions | Création Google OAuth, Telegram avec jeton serveur ou saisie locale, connecteurs du catalogue, test, reconnexion Google et révocation |
+
+Pour Sheets, le formulaire propose les classeurs et feuilles disponibles ; on peut aussi saisir un identifiant et une plage. Pour Gmail, les libellés disponibles alimentent les suggestions de recherche. Les erreurs de configuration Google renvoient vers la checklist. Le consentement s’ouvre dans une fenêtre du même navigateur ; la liste des connexions s’actualise automatiquement. Le callback reste à l’URI autorisée dans Google Cloud, avec le port de la gateway, même si le frontend utilise un autre port.
+
+Pour assembler le scénario : créer et activer les cinq agents du guide, ouvrir **Workflows → Nouveau workflow**, puis ajouter chaque agent depuis la palette. Relier les poignées de sortie aux poignées d’entrée dans l’ordre Telegram → Classification → Sheets → Gmail → Telegram. Sélectionner un nœud pour mapper son entrée avec `{{ nodes.<id>.output.<champ> }}`. Les identifiants utilisables sont affichés dans son panneau. Régler le déclencheur sur Telegram et choisir la même connexion que le premier agent. **Enregistrer**, **Valider**, puis **Activer**. Pour un lancement manuel, fournir un objet JSON dans le panneau du workflow puis cliquer **Exécuter**.
+
+La validation locale détecte cycles, départs multiples et liens invalides ; la validation serveur vérifie également les agents, connexions et déclencheurs. Les modifications d’un workflow sont enregistrées explicitement ; quitter la page complète avec des changements déclenche l’avertissement du navigateur. Les déplacements seuls ne créent pas une nouvelle version avant sauvegarde.
+
+Les jetons d’accès restent en mémoire. Le refresh token rotatif est conservé dans `sessionStorage` pour restaurer la session après rechargement dans le même onglet ; la déconnexion efface les jetons locaux et le cache des requêtes. Le renouvellement est mutualisé entre requêtes concurrentes. Comme tout stockage accessible au JavaScript, `sessionStorage` nécessite de prévenir les XSS ; Nginx ajoute une CSP pour l’interface. Le thème seul est conservé dans `localStorage`. Les formulaires de connexion effacent les secrets saisis après création ou fermeture.
+
+Développement local (API Docker déjà disponible) :
+
+```bash
+npm --prefix frontend ci
+API_PROXY_TARGET=http://localhost:8000 npm --prefix frontend run dev
+# Ouvrir http://localhost:5173
+make frontend-lint frontend-test frontend-build
+```
+
+Le proxy Vite relaie les mêmes routes que Nginx, sans exposer de secret dans le bundle. Le build Docker utilise `npm ci` et les versions verrouillées dans `frontend/package-lock.json` ; Nginx sert le SPA sur 8080, relaie l’API et désactive le buffering SSE. `GET /health-ui` vérifie le serveur statique, `/health` vérifie la gateway. Les liens directs vers les pages React survivent au rechargement.
+
+Test navigateur sur une pile de démonstration :
+
+```bash
+# Installer Chromium une seule fois, ou utiliser un Chrome existant.
+cd frontend
+npx playwright install chromium
+UI_URL=http://localhost:18080 npm run e2e
+# Alternative Linux : CHROME_PATH=/usr/bin/google-chrome UI_URL=http://localhost:18080 npm run e2e
+```
+
+Le test utilise un compte unique, vérifie le mode démonstration avant de créer des connexions, crée les cinq agents via le wizard, assemble les liens dans React Flow, lance le worker, vérifie les cinq sorties et le SSE, puis contrôle le thème et l’affichage mobile. Il nettoie ses agents, workflows, brouillons et connexions ; compte et historique de test restent dans la base QA. Les captures et traces techniques restent dans `frontend/test-results` ignoré par Git.
 
 ## 8. Modèle de données actuel
 
@@ -561,15 +615,16 @@ class EchoConnector(BaseConnector):
 
 Pour des identifiants propres au connecteur, déclarer `credential_fields`, `required_credentials` (mode réel) et éventuellement `always_required_credentials` sur sa classe. La création HTTP valide ces champs et chiffre leurs valeurs sans modification du registre ou des schémas globaux. Le type doit correspondre à `[a-z][a-z0-9_]*` (32 caractères maximum). Un connecteur externe doit respecter `self.ctx.connection.is_mock` et éviter tout appel réseau en démonstration. Les connecteurs embarqués utilisent cette même interface. Ajouter un connecteur n’autorise pas l’accès direct aux tables d’un autre service.
 
-## 10. Tests et vérification des phases 1 à 4
+## 10. Tests et vérification des phases 1 à 5
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
+npm --prefix frontend ci
 make lint
 make test
 # Pile de test séparée, sans identifiants réels :
-GATEWAY_PORT=18000 docker compose -p agent-workflows-qa -f docker-compose.yml -f docker-compose.test.yml up --build -d --wait
+GATEWAY_PORT=18000 FRONTEND_PORT=18080 docker compose -p agent-workflows-qa -f docker-compose.yml -f docker-compose.test.yml up --build -d --wait
 API_URL=http://localhost:18000 make smoke
 # Conserver les volumes de test :
 docker compose -p agent-workflows-qa -f docker-compose.yml -f docker-compose.test.yml down
@@ -607,6 +662,14 @@ Les logs applicatifs sont JSON et portent un identifiant de requête. Ni corps, 
 
 La pile de test utilise `docker-compose.test.yml` pour neutraliser les identifiants réels, activer les simulations et désactiver leur polling réel. Les scripts smoke refusent le mode réel. Sur cette machine, le démarrage protégé standard reste incompatible avec Docker Snap.
 
+### Résultats de la phase 5 — 26 octobre 2026
+
+- 109 tests backend et 16 tests frontend passent ; ESLint, Prettier, Ruff, Black, scan de secrets et build TypeScript/Vite passent.
+- Le conteneur frontend sert l’interface via Nginx non root. Les douze services persistants de la pile QA atteignent `healthy`.
+- Les quatre scripts smoke passent à travers le proxy Nginx sur le port 18080, y compris SSE, Celery, réception Telegram simulée, webhook, cron et déduplication.
+- Chrome a vérifié les cinq créations via le wizard, le test du classifieur dans l’assistant, le glisser-déposer et le mapping dynamique entre nœuds, la reprise de session après rechargement, le graphe de cinq nœuds, sa validation et son activation, le lancement et ses cinq étapes réussies, le journal SSE, le thème et un écran de 390 px sans débordement horizontal.
+- Les essais utilisent un projet Compose QA distinct, des connexions simulées et des comptes temporaires. Ils n’ont envoyé aucun message ou email externe réel. Le consentement Google est confirmé par l’utilisateur ; les essais réels restent dans la phase 6.
+
 ## 11. Sécurité et limites
 
 - Argon2id pour les mots de passe, JWT HS256 avec issuer/audience/type/expiration contrôlés dans la gateway et chaque service ; algorithme fixé.
@@ -617,13 +680,13 @@ La pile de test utilise `docker-compose.test.yml` pour neutraliser les identifia
 - `.env`, fichiers OAuth usuels, environnements virtuels et caches exclus du dépôt. Le scan complète cette protection mais ne garantit pas la détection de tous les secrets.
 - Fernet protège les identifiants et tokens OAuth dans `Connection.encrypted_credentials`, ainsi que le vérificateur PKCE dans Redis. L’état OAuth est à usage unique, lié au compte et au navigateur ; les cookies du client HTTP partagé ne servent pas à authentifier les autres connexions. `FERNET_KEY` peut fournir une clé explicite ; sinon elle est générée dans le volume privé. Conserver cette clé avec les sauvegardes ; changer une clé existante sans migration rend les anciennes connexions illisibles.
 
-Limites actuelles : absence de frontend, pas de reset de mot de passe, vérification d’email ni endpoint logout ; un access token déjà délivré reste valable jusqu’à expiration. Cette configuration sert au développement local ; un déploiement public demandera notamment HTTPS et gestion des secrets adaptée. Les tests unitaires SQLite sont complétés par le smoke PostgreSQL de Compose. Swagger utilise un CDN pour ses assets. Le polling Gmail examine les vingt messages les plus récents correspondant au filtre : pour des volumes importants, une synchronisation History API paginée reste une amélioration à réaliser. Les simulations ne reproduisent pas toutes les fonctionnalités Google.
+Limites actuelles : pas de reset de mot de passe, vérification d’email ni endpoint logout ; un access token déjà délivré reste valable jusqu’à expiration. Cette configuration sert au développement local ; un déploiement public demandera notamment HTTPS et gestion des secrets adaptée. Les tests unitaires SQLite sont complétés par le smoke PostgreSQL de Compose. Swagger utilise un CDN pour ses assets. Le polling Gmail examine les vingt messages les plus récents correspondant au filtre : pour des volumes importants, une synchronisation History API paginée reste une amélioration à réaliser. Les simulations ne reproduisent pas toutes les fonctionnalités Google.
 
 ## 12. Hypothèses et progression
 
 - La phase 4 a été engagée après les demandes de poursuite de l’utilisateur. La checklist finale des six phases n’est pas encore satisfaite.
 - Le dépôt initial contenait uniquement `README.md`, sans code Telegram ni `calc.py`. Les intégrations ont été ajoutées sans réutiliser de code absent ni inventer de secret.
-- Après autorisation explicite, les identifiants Google et Telegram fournis ont été enregistrés uniquement dans le `.env` local, ignoré par Git et protégé en lecture/écriture pour son propriétaire (0600). `MOCK_INTEGRATIONS=false` y est configuré. Aucune valeur secrète n’est reproduite ici. Le consentement OAuth doit encore être terminé dans le navigateur.
+- Après autorisation explicite, les identifiants Google et Telegram fournis ont été enregistrés uniquement dans le `.env` local, ignoré par Git et protégé en lecture/écriture pour son propriétaire (0600). `MOCK_INTEGRATIONS=false` y est configuré. Aucune valeur secrète n’est reproduite ici. Le consentement OAuth a été confirmé par l’utilisateur le 26 octobre 2026 ; les essais de validation du frontend utilisent des connexions simulées et ne prouvent pas les envois Gmail/Sheets réels.
 - En local, un compte créé par l’utilisateur remplace tout compte de démonstration préconfiguré. Le mot de passe PostgreSQL est une valeur de développement, explicitement documentée.
 - Les services agents, workflows, intégrations et exécutions disposent de bases et rôles séparés. La gateway et le service ML sont sans tables persistantes. La clé JWT partagée est vérifiée par chaque service, sans faire confiance à un en-tête d’identité envoyé par le client.
 
@@ -633,7 +696,7 @@ Limites actuelles : absence de frontend, pas de reset de mot de passe, vérifica
 | 2 | Agents, workflows, modèles métier | Validé fonctionnellement ; exception Docker Snap décrite ci-dessus |
 | 3 | Connecteurs, OAuth, Telegram, Ollama | Validé en démonstration et avec Ollama natif ; essais externes réels à faire avec identifiants |
 | 4 | Moteur, déclencheurs, streaming | Validé avec Celery et connecteurs simulés |
-| 5 | Interface React et éditeur | À réaliser |
+| 5 | Interface React et éditeur | Validé avec Chrome, Celery et intégrations simulées |
 | 6 | Vérification complète, documentation finale, démonstration | À réaliser |
 
-La checklist finale exige encore l’ensemble des phases 5 et 6, ainsi qu’un essai réel Google/Telegram et un accès Ollama depuis Docker avec les paramètres locaux.
+La checklist finale exige encore la phase 6, ainsi qu’un essai réel Google/Telegram et un accès Ollama depuis Docker avec les paramètres locaux.
