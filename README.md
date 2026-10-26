@@ -670,20 +670,20 @@ La pile de test utilise `docker-compose.test.yml` pour neutraliser les identifia
 - Chrome a vérifié les cinq créations via le wizard, le test du classifieur dans l’assistant, le glisser-déposer et le mapping dynamique entre nœuds, la reprise de session après rechargement, le graphe de cinq nœuds, sa validation et son activation, le lancement et ses cinq étapes réussies, le journal SSE, le thème et un écran de 390 px sans débordement horizontal.
 - Les essais utilisent un projet Compose QA distinct, des connexions simulées et des comptes temporaires. Ils n’ont envoyé aucun message ou email externe réel. Le consentement Google est confirmé par l’utilisateur ; les essais réels restent dans la phase 6.
 
-### Validation réelle en cours — 26 octobre 2026
+### Validation réelle — 26 octobre 2026
 
 À la demande de l’utilisateur, l’application est relancée sur **http://localhost:18080** (gateway : 18000), avec ses volumes d’origine et les intégrations en mode réel. Les autres projets locaux ne sont pas modifiés. L’URI Google locale est maintenant `http://localhost:18000/api/v1/integrations/google/oauth/callback` ; son ajout au client Google Cloud a été confirmé par l’utilisateur.
 
 - Le bot réel `Freducabot` répond à `getMe` ; aucune émission Telegram n’a été déclenchée pendant la préparation.
 - Ollama est accessible depuis les conteneurs par un relais temporaire lié au pont Docker privé. L’API applicative réelle a correctement classé les textes synthétiques facture, contrat et CV avec `backend=ollama`, sans repli TF-IDF.
 - Les cinq agents de la démonstration sont ajoutés au compte applicatif de l’utilisateur : réception Telegram, classification, archivage Sheets, récapitulatif Gmail et réponse Telegram. Les cinq agents sont désormais actifs et reliés aux connexions réelles. Le classeur « Test Atelier » et l’onglet « Documents » ont été créés à la demande de l’utilisateur ; leurs six en-têtes sont écrits, et les mappings sont configurés pour un texte ou un fichier Telegram.
-- Le workflow de cinq nœuds est enregistré et validé. Il est actuellement en pause pendant l’aide à l’ouverture du chat Telegram. Le test de l’agent classifieur via Celery a réussi sur une facture synthétique avec Ollama réel ; son résultat est visible dans Exécutions.
+- Le workflow de cinq nœuds a réussi sur un texte de facture envoyé par l’utilisateur à `Freducabot` : exécution `bcc2d5a0-d8e6-43e6-bfa8-4280be575147`, source `telegram`, cinq étapes réussies. Ollama a retourné `facture` avec une confiance de 1,0. Le workflow a ensuite été mis en pause pour terminer cette démonstration sans envoi supplémentaire.
 - Correction de l’historique des tests d’agent : les anciens graphes sans position de nœud s’affichent désormais sans plantage, et les nouveaux tests enregistrent type, position et libellé. Vérifications : 26 tests du moteur, 18 tests frontend et deux cas Chrome de régression passent ; l’URL réelle signalée par l’utilisateur a été rouverte avec succès. Une erreur métier de mapping reste affichée comme telle dans le détail de l’exécution.
-- La connexion Google réelle est enregistrée et son accès Gmail a été vérifié en lecture des libellés. Le classeur et ses en-têtes existent ; aucune ligne de classification ni aucun email de test n’ont encore été émis. Le test de bout en bout attend l’envoi utilisateur dans Telegram. Un exemple de facture est fourni dans `docs/examples/facture-test-atelier.txt`.
+- La connexion Google réelle est enregistrée. Une lecture de Sheets confirme exactement une ligne correspondant à la référence du test dans le classeur « Test Atelier », onglet « Documents », avec la classe `facture` et le moteur `ollama`. Gmail a accepté l’email récapitulatif vers le destinataire demandé et Telegram a confirmé l’envoi de la réponse du bot. La réception dans la boîte du destinataire reste à confirmer par celui-ci. Cet essai porte sur un texte Telegram ; il ne valide pas encore un document PDF/OCR. Un exemple de facture est fourni dans `docs/examples/facture-test-atelier.txt`. La liste des classeurs via Google Drive reste à vérifier : son dernier appel avait retourné `accessNotConfigured`, sans empêcher les opérations Sheets directes de cet essai.
 - L’erreur Google `401 invalid_client` a été résolue en remplaçant l’identifiant recopié depuis la capture par celui copié directement dans Google Cloud. Le connecteur a été relancé ; Chrome atteint désormais l’écran Google « Sign in … to continue to App_Workflow ». Le consentement et l’enregistrement effectif de la connexion sont maintenant confirmés.
 - Le point d’échange Google avait ensuite signalé un secret client invalide. La paire exacte a maintenant été importée depuis le JSON Web téléchargé par l’utilisateur et le connecteur relancé ; Google ne rejette plus le secret. L’utilisateur a terminé la nouvelle autorisation et les jetons sont enregistrés chiffrés. Le callback distingue désormais ce refus avec `oauth_invalid_client`, sans exposer le secret ni le code d’autorisation.
 
-La surcharge privée `.secrets/compose.real-test.yml` conserve temporairement l’exception Docker Snap autorisée, le relais Ollama et l’exclusion des caches bytecode invalides rencontrés dans les images locales. Le polling global des connexions reste suspendu ; la réception Telegram est lancée explicitement pour le test. L’ordonnanceur est actif, mais le workflow est mis en pause tant que le chat utilisateur n’est pas prêt. Le Compose versionné conserve ses protections. Cette session est laissée démarrée pour accompagner le test réel.
+La surcharge privée `.secrets/compose.real-test.yml` conserve temporairement l’exception Docker Snap autorisée, le relais Ollama et l’exclusion des caches bytecode invalides rencontrés dans les images locales. Le polling global des connexions reste suspendu ; la réception Telegram est lancée explicitement pour le test. L’ordonnanceur est actif ; le workflow de démonstration est en pause après le test réussi. Le Compose versionné conserve ses protections. L’application reste démarrée.
 
 ## 11. Sécurité et limites
 
@@ -709,9 +709,9 @@ Limites actuelles : pas de reset de mot de passe, vérification d’email ni end
 |---|---|---|
 | 1 | Compose, auth, gateway, migrations, tests, CI | Validé fonctionnellement ; exception Docker Snap décrite ci-dessus |
 | 2 | Agents, workflows, modèles métier | Validé fonctionnellement ; exception Docker Snap décrite ci-dessus |
-| 3 | Connecteurs, OAuth, Telegram, Ollama | Validé en démonstration et avec Ollama natif ; essais externes réels à faire avec identifiants |
+| 3 | Connecteurs, OAuth, Telegram, Ollama | Démonstration et parcours réel Telegram, Ollama depuis Docker, Sheets et Gmail validés ; liste Drive à vérifier |
 | 4 | Moteur, déclencheurs, streaming | Validé avec Celery et connecteurs simulés |
 | 5 | Interface React et éditeur | Validé avec Chrome, Celery et intégrations simulées |
-| 6 | Vérification complète, documentation finale, démonstration | À réaliser |
+| 6 | Vérification complète, documentation finale, démonstration | Parcours réel sur texte réussi ; checklist finale encore à terminer |
 
-La checklist finale exige encore la phase 6, ainsi qu’un essai réel Google/Telegram et un accès Ollama depuis Docker avec les paramètres locaux.
+Le parcours réel Google/Telegram et l’accès Ollama depuis Docker ont été vérifiés sur un texte de facture. La checklist finale de phase 6 reste à terminer, notamment les essais de fichiers et la vérification de la liste Google Drive.
