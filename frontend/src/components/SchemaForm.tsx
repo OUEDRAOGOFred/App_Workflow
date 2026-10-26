@@ -1,0 +1,14 @@
+import Ajv from 'ajv';
+import type {Json,Obj,Schema} from '../api/types';
+import {JsonEditor} from './ui';
+const ajv=new Ajv({allErrors:true,strict:false});
+export function defaults(schema:Schema):Obj{return Object.fromEntries(Object.entries(schema.properties||{}).filter(([,v])=>v.default!==undefined).map(([k,v])=>[k,v.default as Json]));}
+export function validateConfig(schema:Schema,data:Obj):string[]{const validate=ajv.compile(schema);if(validate(data))return[];return(validate.errors||[]).map(e=>`${e.instancePath||'Configuration'} : ${e.message}`);}
+const names:Record<string,string>={accept_documents:'Accepter les documents',chat_id:'Identifiant du chat',text:'Message',query:'Recherche Gmail',max_results:'Nombre de messages',to:'Destinataire',subject:'Objet',body:'Contenu',html:'Contenu HTML',spreadsheet_id:'Classeur Google Sheets',range:'Feuille et plage',values:'Valeurs de la ligne',confidence_threshold:'Seuil de confiance',classes:'Classes',prompt:'Prompt',temperature:'Température',field:'Champ à comparer',operator:'Opérateur',value:'Valeur comparée',url:'URL',method:'Méthode HTTP',mapping:'Mapping de sortie'};
+export function SchemaForm({schema,value,onChange,onValidity}:{schema:Schema;value:Obj;onChange:(value:Obj)=>void;onValidity?:(valid:boolean)=>void}){
+ return <div className="schema-form">{Object.entries(schema.properties||{}).map(([key,field])=>{const label=(names[key]||key)+(schema.required?.includes(key)?' *':'');const set=(v:Json)=>onChange({...value,[key]:v});
+ if(field.type==='boolean')return <label key={key} className="check-field"><input type="checkbox" checked={value[key]===true} onChange={e=>set(e.target.checked)}/>{label}</label>;
+ if(field.type==='array'||field.type==='object'||!field.type)return <div key={key}><JsonEditor label={label} value={value[key]??(field.type==='array'?[]:field.type==='object'?{}:null)} onChange={v=>set(v as Json)} onValidity={onValidity}/>{field.type==='array'&&<small>Format JSON, par exemple ["facture", "contrat", "cv"].</small>}</div>;
+ return <label className="field" key={key}><span>{label}</span>{field.enum?<select value={String(value[key]??'')} onChange={e=>set(e.target.value)}><option value="">Choisir…</option>{field.enum.map(v=><option key={v}>{v}</option>)}</select>:<input type={field.type==='number'||field.type==='integer'?'number':'text'} step={field.type==='integer'?1:'any'} min={field.minimum} max={field.maximum} minLength={field.minLength} maxLength={field.maxLength} required={schema.required?.includes(key)} value={String(value[key]??'')} placeholder={key==='range'?'Documents!A:D':key==='text'?'{{ input.text }}':undefined} onChange={e=>{if(!e.target.value){const next={...value};delete next[key];onChange(next);}else set(field.type==='number'||field.type==='integer'?Number(e.target.value):e.target.value);}}/>}{field.description&&<small>{field.description}</small>}</label>;
+ })}</div>;
+}

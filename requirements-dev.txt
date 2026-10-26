@@ -1,0 +1,11 @@
+-r services/auth-service/requirements.txt
+-r services/api-gateway/requirements.txt
+-r services/agent-service/requirements.txt
+-r services/workflow-service/requirements.txt
+-r services/integration-service/requirements.txt
+-r services/ml-classifier-service/requirements.txt
+-r services/execution-service/requirements.txt
+pytest==8.4.2
+ruff==0.14.2
+black==25.9.0
+

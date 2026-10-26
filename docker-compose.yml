@@ -1,0 +1,348 @@
+name: agent-workflows
+x-service: &service
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+services:
+  secrets-init:
+    image: python:3.11-slim
+    restart: "no"
+    volumes:
+      - service-secrets:/secrets
+    command:
+      - python
+      - -c
+      - |
+        import base64, os, pathlib, secrets
+        os.umask(0o077)
+        path = pathlib.Path('/secrets/jwt')
+        if not path.exists():
+            path.write_text(secrets.token_urlsafe(48))
+        os.chown('/secrets', 10001, 10001)
+        os.chown(path, 10001, 10001)
+        key = pathlib.Path('/secrets/fernet')
+        if not key.exists():
+            key.write_text(base64.urlsafe_b64encode(os.urandom(32)).decode())
+        os.chown(key, 10001, 10001)
+  postgres:
+    <<: *service
+    image: postgres:16-alpine
+    read_only: false
+    cap_drop: []
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-workflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-workflow_local_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-workflow_auth}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  redis:
+    <<: *service
+    image: redis:7-alpine
+    command: [redis-server, --appendonly, 'yes']
+    user: redis
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  databases-init:
+    <<: *service
+    image: postgres:16-alpine
+    restart: "no"
+    user: postgres
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-workflow}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-workflow_local_dev}
+      PGDATABASE: ${POSTGRES_DB:-workflow_auth}
+      AGENT_DB_PASSWORD: ${AGENT_DB_PASSWORD:-agents_local_dev}
+      WORKFLOW_DB_PASSWORD: ${WORKFLOW_DB_PASSWORD:-workflows_local_dev}
+      INTEGRATION_DB_PASSWORD: ${INTEGRATION_DB_PASSWORD:-integrations_local_dev}
+      EXECUTION_DB_PASSWORD: ${EXECUTION_DB_PASSWORD:-executions_local_dev}
+    volumes:
+      - ./infra/postgres:/provision:ro
+    entrypoint: [/bin/sh, /provision/provision.sh]
+    depends_on:
+      postgres:
+        condition: service_healthy
+  auth-service:
+    <<: *service
+    build: ./services/auth-service
+    environment:
+      DB_HOST: postgres
+      DB_USER: ${POSTGRES_USER:-workflow}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-workflow_local_dev}
+      DB_NAME: ${POSTGRES_DB:-workflow_auth}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_SECRET_FILE: /run/secrets/jwt
+      ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-15}
+      REFRESH_TOKEN_DAYS: ${REFRESH_TOKEN_DAYS:-7}
+    volumes:
+      - service-secrets:/run/secrets:ro
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+  api-gateway:
+    <<: *service
+    build: ./services/api-gateway
+    ports:
+      - '127.0.0.1:${GATEWAY_PORT:-8000}:8000'
+    environment:
+      AUTH_SERVICE_URL: http://auth-service:8000
+      AGENT_SERVICE_URL: http://agent-service:8000
+      WORKFLOW_SERVICE_URL: http://workflow-service:8000
+      INTEGRATION_SERVICE_URL: http://integration-service:8000
+      CLASSIFIER_SERVICE_URL: http://ml-classifier-service:8000
+      EXECUTION_SERVICE_URL: http://execution-service:8000
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_SECRET_FILE: /run/secrets/jwt
+      CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:5173","http://localhost:8080"]}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
+      AUTH_RATE_LIMIT_PER_MINUTE: ${AUTH_RATE_LIMIT_PER_MINUTE:-20}
+    volumes:
+      - service-secrets:/run/secrets:ro
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      agent-service:
+        condition: service_healthy
+      workflow-service:
+        condition: service_healthy
+      integration-service:
+        condition: service_healthy
+      ml-classifier-service:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  agent-service:
+    <<: *service
+    build: ./services/agent-service
+    environment:
+      DB_HOST: postgres
+      DB_USER: workflow_agents
+      DB_PASSWORD: ${AGENT_DB_PASSWORD:-agents_local_dev}
+      DB_NAME: workflow_agents
+      INTEGRATION_SERVICE_URL: http://integration-service:8000
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_SECRET_FILE: /run/secrets/jwt
+    volumes:
+      - service-secrets:/run/secrets:ro
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      databases-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+  workflow-service:
+    <<: *service
+    build: ./services/workflow-service
+    environment:
+      DB_HOST: postgres
+      DB_USER: workflow_workflows
+      DB_PASSWORD: ${WORKFLOW_DB_PASSWORD:-workflows_local_dev}
+      DB_NAME: workflow_workflows
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_SECRET_FILE: /run/secrets/jwt
+      AGENT_SERVICE_URL: http://agent-service:8000
+    volumes:
+      - service-secrets:/run/secrets:ro
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      databases-init:
+        condition: service_completed_successfully
+      agent-service:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+  integration-service:
+    <<: *service
+    build: ./services/integration-service
+    environment:
+      DB_HOST: postgres
+      DB_USER: workflow_integrations
+      DB_PASSWORD: ${INTEGRATION_DB_PASSWORD:-integrations_local_dev}
+      DB_NAME: workflow_integrations
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_SECRET_FILE: /run/secrets/jwt
+      FERNET_KEY: ${FERNET_KEY:-}
+      FERNET_KEY_FILE: /run/secrets/fernet
+      MOCK_INTEGRATIONS: ${MOCK_INTEGRATIONS:-true}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/v1/integrations/google/oauth/callback}
+      GOOGLE_TEST_USER_EMAIL: ${GOOGLE_TEST_USER_EMAIL:-}
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-}
+      GMAIL_APP_PASSWORD: ${GMAIL_APP_PASSWORD:-}
+      POLLING_ENABLED: ${POLLING_ENABLED:-true}
+      GMAIL_POLL_SECONDS: ${GMAIL_POLL_SECONDS:-30}
+      TELEGRAM_POLL_SECONDS: ${TELEGRAM_POLL_SECONDS:-1}
+      HTTP_ALLOWED_HOSTS: ${HTTP_ALLOWED_HOSTS:-}
+    volumes:
+      - service-secrets:/run/secrets:ro
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      databases-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+  ml-classifier-service:
+    <<: *service
+    build:
+      context: ./services/ml-classifier-service
+      args:
+        INSTALL_OCR: ${INSTALL_OCR:-false}
+    environment:
+      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_SECRET_FILE: /run/secrets/jwt
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3}
+      CLASSIFIER_BACKEND: ${CLASSIFIER_BACKEND:-auto}
+      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-30}
+      OLLAMA_RETRIES: ${OLLAMA_RETRIES:-2}
+      CLASSES: ${CLASSES:-facture,contrat,cv}
+      MODEL_PATH: ${MODEL_PATH:-}
+      OCR_ENABLED: ${OCR_ENABLED:-false}
+    volumes:
+      - service-secrets:/run/secrets:ro
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+  execution-service:
+    <<: *service
+    build: ./services/execution-service
+    environment: &execution-environment
+      DB_HOST: postgres
+      DB_USER: workflow_executions
+      DB_PASSWORD: ${EXECUTION_DB_PASSWORD:-executions_local_dev}
+      DB_NAME: workflow_executions
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_SECRET_FILE: /run/secrets/jwt
+      AGENT_SERVICE_URL: http://agent-service:8000
+      WORKFLOW_SERVICE_URL: http://workflow-service:8000
+      INTEGRATION_SERVICE_URL: http://integration-service:8000
+      CLASSIFIER_SERVICE_URL: http://ml-classifier-service:8000
+      SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
+      SCHEDULER_TIMEZONE: ${SCHEDULER_TIMEZONE:-Africa/Ouagadougou}
+      EXECUTION_MAX_SECONDS: ${EXECUTION_MAX_SECONDS:-7200}
+    volumes:
+      - service-secrets:/run/secrets:ro
+    depends_on:
+      databases-init:
+        condition: service_completed_successfully
+      secrets-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+  execution-worker:
+    <<: *service
+    build: ./services/execution-service
+    environment: *execution-environment
+    command: [celery, -A, app.core.celery_app:celery, worker, --loglevel=INFO, --concurrency=2, --hostname=execution@%h]
+    volumes:
+      - service-secrets:/run/secrets:ro
+    depends_on:
+      execution-service:
+        condition: service_healthy
+      agent-service:
+        condition: service_healthy
+      workflow-service:
+        condition: service_healthy
+      integration-service:
+        condition: service_healthy
+      ml-classifier-service:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import socket; from app.core.celery_app import celery; assert celery.control.ping(destination=['execution@'+socket.gethostname()],timeout=2)"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+  execution-scheduler:
+    <<: *service
+    build: ./services/execution-service
+    environment: *execution-environment
+    command: [python, -m, app.services.scheduler]
+    volumes:
+      - service-secrets:/run/secrets:ro
+    depends_on:
+      execution-worker:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import os,redis; assert redis.Redis.from_url(os.environ['REDIS_URL']).exists('execution-scheduler:heartbeat')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+volumes:
+  postgres-data:
+  redis-data:
+  service-secrets:
+

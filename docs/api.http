@@ -1,0 +1,508 @@
+# REST Client (VS Code). Run register, login, then me/refresh in this order.
+# No real credentials or tokens belong in this file.
+@baseUrl = http://localhost:8000
+@email = student@example.com
+@password = example-password-123
+
+### Readiness
+GET {{baseUrl}}/health
+
+### Swagger
+GET {{baseUrl}}/docs
+
+### Aggregated OpenAPI
+GET {{baseUrl}}/openapi.json
+
+### Register (409 if already registered)
+POST {{baseUrl}}/api/v1/auth/register
+Content-Type: application/json
+
+{"email":"{{email}}","password":"{{password}}"}
+
+### Login
+# @name login
+POST {{baseUrl}}/api/v1/auth/login
+Content-Type: application/json
+
+{"email":"{{email}}","password":"{{password}}"}
+
+### Current profile
+GET {{baseUrl}}/api/v1/auth/me
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Refresh (the old refresh token can only be used once)
+# @name refresh
+POST {{baseUrl}}/api/v1/auth/refresh
+Content-Type: application/json
+
+{"refresh_token":"{{login.response.body.$.refresh_token}}"}
+
+### Profile with the new token
+GET {{baseUrl}}/api/v1/auth/me
+Authorization: Bearer {{refresh.response.body.$.access_token}}
+
+### Renew again with the rotated refresh token
+POST {{baseUrl}}/api/v1/auth/refresh
+Content-Type: application/json
+
+{"refresh_token":"{{refresh.response.body.$.refresh_token}}"}
+
+### Catalogue of agent types and JSON Schemas
+GET {{baseUrl}}/api/v1/agent-types
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Create first agent (draft)
+# @name firstAgent
+POST {{baseUrl}}/api/v1/agents
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"name":"Préparer le texte","type_key":"transform","config":{"mapping":{"text":"Facture numéro 42"}}}
+
+### Read agent
+GET {{baseUrl}}/api/v1/agents/{{firstAgent.response.body.$.id}}
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Update agent (puts it back in draft)
+PUT {{baseUrl}}/api/v1/agents/{{firstAgent.response.body.$.id}}
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"name":"Préparer le document"}
+
+### Activate first agent
+POST {{baseUrl}}/api/v1/agents/{{firstAgent.response.body.$.id}}/activate
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Create second agent
+# Unicode braces preserve the workflow expression without REST Client substitution.
+# @name secondAgent
+POST {{baseUrl}}/api/v1/agents
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"name":"Préparer le résultat","type_key":"transform","config":{"mapping":{"document":"\u007b\u007b nodes.start.output.text \u007d\u007d"}}}
+
+### Activate second agent
+POST {{baseUrl}}/api/v1/agents/{{secondAgent.response.body.$.id}}/activate
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### List agents with status/type filters and pagination
+GET {{baseUrl}}/api/v1/agents?status=active&type_key=transform&limit=100&offset=0
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Save a partial wizard draft
+# @name draft
+POST {{baseUrl}}/api/v1/agent-drafts
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"step":3,"data":{"type_key":"gmail_send","name":"Récapitulatif","config":{"to":"student@example.com"}}}
+
+### Restore draft
+GET {{baseUrl}}/api/v1/agent-drafts/{{draft.response.body.$.id}}
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### List drafts
+GET {{baseUrl}}/api/v1/agent-drafts?limit=100&offset=0
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Replace saved draft
+PUT {{baseUrl}}/api/v1/agent-drafts/{{draft.response.body.$.id}}
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"step":4,"data":{"type_key":"gmail_send","name":"Récapitulatif","config":{"to":"student@example.com","subject":"Document","body":"Résumé"}}}
+
+### Create a workflow referencing real agents created above
+# @name workflow
+POST {{baseUrl}}/api/v1/workflows
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{
+  "name":"Préparation de document",
+  "trigger":{"type":"manual"},
+  "graph":{
+    "nodes":[
+      {"id":"start","position":{"x":0,"y":100},"data":{"agent_id":"{{firstAgent.response.body.$.id}}"}},
+      {"id":"finish","position":{"x":300,"y":100},"data":{"agent_id":"{{secondAgent.response.body.$.id}}","input":{"text":"\u007b\u007b nodes.start.output.text \u007d\u007d"}}}
+    ],
+    "edges":[{"id":"start_finish","source":"start","target":"finish"}]
+  }
+}
+
+### Read workflow
+GET {{baseUrl}}/api/v1/workflows/{{workflow.response.body.$.id}}
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### List workflows
+GET {{baseUrl}}/api/v1/workflows?is_active=false&limit=100&offset=0
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Validate graph and verify its agents via REST
+POST {{baseUrl}}/api/v1/workflows/{{workflow.response.body.$.id}}/validate
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Activate workflow (enables automatic triggers)
+# @name activatedWorkflow
+POST {{baseUrl}}/api/v1/workflows/{{workflow.response.body.$.id}}/activate
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+
+### Run this workflow before cleanup (asynchronous Celery execution)
+# @name execution
+POST {{baseUrl}}/api/v1/workflows/{{workflow.response.body.$.id}}/run
+Authorization: Bearer {{login.response.body.$.access_token}}
+Idempotency-Key: demo-manual-1
+Content-Type: application/json
+
+{"payload":{"text":"Démonstration"}}
+
+### Execution history
+GET {{baseUrl}}/api/v1/executions?limit=100&offset=0
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Archived graph, step inputs, outputs and errors
+GET {{baseUrl}}/api/v1/executions/{{execution.response.body.$.id}}
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### SSE stream (set Last-Event-ID when reconnecting)
+GET {{baseUrl}}/api/v1/executions/{{execution.response.body.$.id}}/stream?after_id=0
+Authorization: Bearer {{login.response.body.$.access_token}}
+Accept: text/event-stream
+
+### Cooperative cancellation
+POST {{baseUrl}}/api/v1/executions/{{execution.response.body.$.id}}/cancel
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Test a saved agent
+POST {{baseUrl}}/api/v1/agents/{{firstAgent.response.body.$.id}}/test
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"input":{"text":"Test"}}
+
+### Test a complete saved draft
+POST {{baseUrl}}/api/v1/agent-drafts/{{draft.response.body.$.id}}/test
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"input":{"text":"Test"}}
+
+
+### Update with the current version; this creates a new version and deactivates
+PUT {{baseUrl}}/api/v1/workflows/{{workflow.response.body.$.id}}
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"version":{{activatedWorkflow.response.body.$.version}},"description":"Deux agents de transformation"}
+
+### Immutable version snapshots (newest first)
+GET {{baseUrl}}/api/v1/workflows/{{workflow.response.body.$.id}}/versions?limit=100&offset=0
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Deactivate workflow (idempotent if already inactive)
+POST {{baseUrl}}/api/v1/workflows/{{workflow.response.body.$.id}}/deactivate
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Deactivate first agent
+POST {{baseUrl}}/api/v1/agents/{{firstAgent.response.body.$.id}}/deactivate
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Cleanup: remove workflow and all its version snapshots
+DELETE {{baseUrl}}/api/v1/workflows/{{workflow.response.body.$.id}}
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Cleanup: remove first agent
+DELETE {{baseUrl}}/api/v1/agents/{{firstAgent.response.body.$.id}}
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Cleanup: remove second agent
+DELETE {{baseUrl}}/api/v1/agents/{{secondAgent.response.body.$.id}}
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Cleanup: remove draft
+DELETE {{baseUrl}}/api/v1/agent-drafts/{{draft.response.body.$.id}}
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Phase 3: use mock mode for the following demonstration actions
+GET {{baseUrl}}/api/v1/integrations/status
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Connector catalogue, credentials fields and action schemas
+GET {{baseUrl}}/api/v1/integrations/connectors
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Google OAuth start (mock: returns connection; real: open authorization_url)
+# Real OAuth must start and finish in the same browser (HttpOnly binding cookie).
+# @name googleSession
+GET {{baseUrl}}/api/v1/integrations/google/oauth/start
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### OAuth callback route: deliberately invalid state, should be rejected
+# A successful real callback is performed by Google in the initiating browser.
+GET {{baseUrl}}/api/v1/integrations/google/oauth/callback?state=invalid-demo-state&error=access_denied
+
+### Public Google setup checklist
+GET {{baseUrl}}/api/v1/integrations/google/checklist
+
+### Connect Telegram using TELEGRAM_TOKEN in real mode; no token needed in mock
+# @name telegramConnection
+POST {{baseUrl}}/api/v1/integrations/telegram/connect
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"name":"Bot de démonstration"}
+
+### Create HTTP connection; all credentials are encrypted server-side
+# @name httpConnection
+POST {{baseUrl}}/api/v1/connections
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"type":"http","name":"HTTP de démonstration","credentials":{"base_url":"https://example.invalid/"}}
+
+### Create SMTP/IMAP fallback connection (mock)
+# @name smtpConnection
+POST {{baseUrl}}/api/v1/connections
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"type":"gmail_smtp","name":"Gmail SMTP de démonstration"}
+
+### List connections (secrets are never returned)
+GET {{baseUrl}}/api/v1/connections?limit=100&offset=0
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Connection detail
+GET {{baseUrl}}/api/v1/connections/{{httpConnection.response.body.$.id}}
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Test Google connection
+POST {{baseUrl}}/api/v1/connections/{{googleSession.response.body.$.connection.id}}/test
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### List Google spreadsheets
+GET {{baseUrl}}/api/v1/integrations/sheets/{{googleSession.response.body.$.connection.id}}/spreadsheets
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### List tabs of the demo spreadsheet
+GET {{baseUrl}}/api/v1/integrations/sheets/{{googleSession.response.body.$.connection.id}}/spreadsheets/demo-sheet/sheets
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### List Gmail labels
+GET {{baseUrl}}/api/v1/integrations/gmail/{{googleSession.response.body.$.connection.id}}/labels
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Inject a Telegram demo receipt; document bytes are base64
+POST {{baseUrl}}/api/v1/connections/{{telegramConnection.response.body.$.id}}/actions/inject_update
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"params":{"chat_id":"demo-chat","text":"Facture numéro 42, total 125 euros TVA","document":{"filename":"facture.txt","content_base64":"RmFjdHVyZQ="}}}
+
+### Receive pending Telegram events and publish to Redis
+POST {{baseUrl}}/api/v1/connections/{{telegramConnection.response.body.$.id}}/poll
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Configured classes and selected model backend
+GET {{baseUrl}}/api/v1/classes
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Classify text
+# @name classification
+POST {{baseUrl}}/api/v1/classify
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"text":"Facture numéro 42, montant total 125 euros, TVA et paiement à trente jours","confidence_threshold":0.5}
+
+### Classify a multipart file on the same endpoint
+POST {{baseUrl}}/api/v1/classify
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: multipart/form-data; boundary=WorkflowBoundary
+
+--WorkflowBoundary
+Content-Disposition: form-data; name="file"; filename="facture.txt"
+Content-Type: text/plain
+
+Facture numero 42, montant total 125 euros TVA.
+--WorkflowBoundary--
+
+### Dedicated file form endpoint (also supports PDF/PNG/JPEG)
+POST {{baseUrl}}/api/v1/classify/file
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: multipart/form-data; boundary=WorkflowBoundary
+
+--WorkflowBoundary
+Content-Disposition: form-data; name="file"; filename="contrat.txt"
+Content-Type: text/plain
+
+Contrat accord entre les parties, obligations, signature et duree.
+--WorkflowBoundary--
+
+### Generic Ollama prompt; demo backend returns an explicitly marked extractive summary
+POST {{baseUrl}}/api/v1/llm
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"prompt":"Résume cette facture : montant total 125 euros, paiement à trente jours.","temperature":0.2}
+
+### Persist the classification in the demo Sheet
+POST {{baseUrl}}/api/v1/connections/{{googleSession.response.body.$.connection.id}}/actions/sheets_append
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"params":{"spreadsheet_id":"demo-sheet","range":"Documents!A:C","values":[["{{classification.response.body.$.label}}",{{classification.response.body.$.confidence}},"facture.txt"]]}}
+
+### Read the Sheet
+POST {{baseUrl}}/api/v1/connections/{{googleSession.response.body.$.connection.id}}/actions/sheets_read
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"params":{"spreadsheet_id":"demo-sheet","range":"Documents!A1:C10"}}
+
+### Update a cell
+POST {{baseUrl}}/api/v1/connections/{{googleSession.response.body.$.connection.id}}/actions/sheets_update
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"params":{"spreadsheet_id":"demo-sheet","range":"Documents!C1","values":[["document-reçu.txt"]]}}
+
+### Create another tab
+POST {{baseUrl}}/api/v1/connections/{{googleSession.response.body.$.connection.id}}/actions/sheets_create
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"params":{"spreadsheet_id":"demo-sheet","title":"Archives"}}
+
+### List via generic actions endpoint
+POST {{baseUrl}}/api/v1/connections/{{googleSession.response.body.$.connection.id}}/actions/sheets_list
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"params":{}}
+
+### Read tabs via generic actions endpoint
+POST {{baseUrl}}/api/v1/connections/{{googleSession.response.body.$.connection.id}}/actions/sheets_tabs
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"params":{"spreadsheet_id":"demo-sheet"}}
+
+### Read Gmail messages
+POST {{baseUrl}}/api/v1/connections/{{googleSession.response.body.$.connection.id}}/actions/gmail_read
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"params":{"query":"is:unread","from_email":"supplier@example.com","max_results":10}}
+
+### Read Gmail labels via generic action
+POST {{baseUrl}}/api/v1/connections/{{googleSession.response.body.$.connection.id}}/actions/gmail_labels
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"params":{}}
+
+### Download a Gmail demo attachment
+POST {{baseUrl}}/api/v1/connections/{{googleSession.response.body.$.connection.id}}/actions/gmail_attachment
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"params":{"message_id":"demo-mail","attachment_id":"demo-attachment"}}
+
+### Queue a Gmail summary (mock) with optional attachment
+POST {{baseUrl}}/api/v1/connections/{{googleSession.response.body.$.connection.id}}/actions/gmail_send
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"params":{"to":"student@example.com","subject":"Document classifié","body":"Classe : {{classification.response.body.$.label}}","attachment":{"filename":"facture.txt","content_type":"text/plain","content_base64":"RmFjdHVyZQ="}}}
+
+### Adding a Gmail label is intentionally refused: minimal scopes exclude gmail.modify
+POST {{baseUrl}}/api/v1/connections/{{googleSession.response.body.$.connection.id}}/actions/gmail_add_label
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"params":{"message_id":"demo-mail","label_id":"INBOX"}}
+
+### Receive new Gmail events (polling cursor prevents immediate repeat)
+POST {{baseUrl}}/api/v1/connections/{{googleSession.response.body.$.connection.id}}/poll
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Queue Telegram reply (mock)
+POST {{baseUrl}}/api/v1/connections/{{telegramConnection.response.body.$.id}}/actions/send_message
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"params":{"chat_id":"demo-chat","text":"Classe détectée : {{classification.response.body.$.label}}"}}
+
+### Telegram file action (real file ID required in real mode; 404 in demo)
+POST {{baseUrl}}/api/v1/connections/{{telegramConnection.response.body.$.id}}/actions/get_file
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"params":{"file_id":"replace-with-real-file-id"}}
+
+### SMTP/IMAP reading fallback
+POST {{baseUrl}}/api/v1/connections/{{smtpConnection.response.body.$.id}}/actions/gmail_read
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"params":{"from_email":"supplier@example.com","unread":true,"max_results":10}}
+
+### SMTP sending fallback (mock)
+POST {{baseUrl}}/api/v1/connections/{{smtpConnection.response.body.$.id}}/actions/gmail_send
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"params":{"to":"student@example.com","subject":"Récapitulatif","body":"Classe facture"}}
+
+### HTTP connector (mock, no external request)
+POST {{baseUrl}}/api/v1/connections/{{httpConnection.response.body.$.id}}/actions/request
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"params":{"path":"/items","method":"POST","body":{"label":"facture"}}}
+
+### Inspect mock outbox
+GET {{baseUrl}}/api/v1/connections/{{googleSession.response.body.$.connection.id}}/outbox?limit=100&offset=0
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Cleanup demo Google connection
+DELETE {{baseUrl}}/api/v1/connections/{{googleSession.response.body.$.connection.id}}
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Cleanup demo Telegram connection
+DELETE {{baseUrl}}/api/v1/connections/{{telegramConnection.response.body.$.id}}
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Cleanup demo SMTP connection
+DELETE {{baseUrl}}/api/v1/connections/{{smtpConnection.response.body.$.id}}
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Cleanup demo HTTP connection
+DELETE {{baseUrl}}/api/v1/connections/{{httpConnection.response.body.$.id}}
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Create/rotate webhook key (first create an active workflow with trigger.type=webhook)
+# Replace webhookWorkflowId with its UUID. Secret is returned once; no real secret in this file.
+@webhookWorkflowId = replace-with-webhook-workflow-uuid
+# @name webhookKey
+POST {{baseUrl}}/api/v1/workflows/{{webhookWorkflowId}}/webhook-key
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Public webhook invocation; no application JWT needed
+POST {{baseUrl}}/api/v1/webhooks/{{webhookWorkflowId}}
+X-Webhook-Secret: {{webhookKey.response.body.$.secret}}
+Idempotency-Key: external-event-1
+Content-Type: application/json
+
+{"text":"Document reçu"}
+
+### HTTP request without a saved connection (demo responds locally)
+POST {{baseUrl}}/api/v1/integrations/http/request
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{"url":"https://example.org","method":"GET"}

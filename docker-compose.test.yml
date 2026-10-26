@@ -1,0 +1,20 @@
+# Isolated demo settings: never use the real connector credentials from .env.
+services:
+  api-gateway:
+    environment:
+      RATE_LIMIT_PER_MINUTE: 2000
+      AUTH_RATE_LIMIT_PER_MINUTE: 100
+  integration-service:
+    environment:
+      MOCK_INTEGRATIONS: 'true'
+      POLLING_ENABLED: 'false'
+      GOOGLE_CLIENT_ID: ''
+      GOOGLE_CLIENT_SECRET: ''
+      TELEGRAM_TOKEN: ''
+      GMAIL_APP_PASSWORD: ''
+  ml-classifier-service:
+    environment:
+      CLASSIFIER_BACKEND: demo
+  execution-scheduler:
+    environment:
+      SCHEDULER_ENABLED: 'true'
